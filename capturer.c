@@ -1,6 +1,8 @@
 #include "capturer.h"
 #include "main.h"
 
+#include "osflite.h"
+
 static const face_t DEFAULT_FACE = {0,      {0, 0, 0}, {0, 0, 0}, {1, 1}, {0, 0}, {0, 0},
                                     {0, 0}, {0, 0},    {0, 0},    {1, 1}, 0,      1};
 
@@ -23,15 +25,21 @@ extern void face_update(time_face_t *pair);
 
 // loads python
 static void osf_init() {
+    printf("Loading libpython.\n");
+    int err = PyImport_AppendInittab("osflite", PyInit_osflite);
+    if (err) {
+        printf("PyImport failed.\n");
+    }
+    Py_Initialize();
+    PyImport_ImportModule("osflite");
+
+    // Release Python Global Interpreter Lock
+    PyEval_SaveThread();
 }
 
 // runs NN inference once
 static void osf_run(char *yuyv_img, face_t *face) {
-    sleep_ms(50);
-
-    face->track_fail = 0;
-    face->eye[0] = get_current_ms();
-    face->eye[1] = 5.0;
+    run_osf(yuyv_img, face);
 }
 
 void capturer_init(char *cam_dev_name, int focus) {
@@ -46,6 +54,9 @@ void capturer_serve() {
 }
 
 void capturer_get() {
+    // Acquire Python Global Interpreter Lock
+    PyGILState_STATE gstate = PyGILState_Ensure();
+
     time_face_t pair;
 
     while (1) {
@@ -53,13 +64,18 @@ void capturer_get() {
         pair.ms = get_current_ms();
 
         if (camera_capture()) {
-            // camera failed
+            printf("Camera failed.\n");
             pair.face = DEFAULT_FACE;
             sleep_ms(50);
         } else {
             osf_run(img_buffer, &pair.face);
+            if (pair.face.track_fail) {
+                printf("Face tracking failed.\n");
+            }
         }
 
         face_update(&pair);
     }
+
+    PyGILState_Release(gstate);
 }
